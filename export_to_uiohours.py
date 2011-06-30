@@ -78,6 +78,7 @@ def persist_to_ods(template_filename, output_filename, person, projects, timetab
 
     # Fetch the tables. The monthly tables are numbers.
     month_tables = [None] * 12
+    first_week_list = [None] * 12
     for tab in document.get_body().get_table_list():
         name = tab.get_name()
         try:
@@ -87,6 +88,7 @@ def persist_to_ods(template_filename, output_filename, person, projects, timetab
                 oversikt_table = tab
         else:
             month_tables[idx - 1] = tab
+            first_week_list[idx - 1] = int(tab.get_value((2, 2)))
 
     def set_value(tab, row, col, value):
         # For some reason, direct set_value on table does not work
@@ -106,8 +108,14 @@ def persist_to_ods(template_filename, output_filename, person, projects, timetab
 
     # Register times
     for date, hourlist in timetable.iteritems():
-        week_offset = get_week_number(date) - get_first_week_of_month(date)
-        tab = month_tables[date.tm_mon - 1]
+        month_idx = date.tm_mon - 1
+        week = get_week_number(date)
+        week_offset = week - first_week_list[month_idx]
+        tab = month_tables[month_idx]
+        week_present_in_doc = int(tab.get_value((2, 2 + 13 * week_offset)))
+        if week_present_in_doc != week:
+            # Sanity check
+            raise AssertionError("%d != %d" % (week_present_in_doc, week))
         row = 4 + 13 * week_offset
         col = 4 + date.tm_wday
         for p, h in enumerate(hourlist):
