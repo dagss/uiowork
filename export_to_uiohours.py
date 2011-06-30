@@ -25,10 +25,16 @@ def parse_time_record(line):
         assert len(fields) == 2
     if timerange == 'full':
         timerange = '08:00-15:30'
+    if ';' in timerange:
+        timerange, modifier = timerange.split(';')
+        assert modifier[-1] == 'm'
+        adjustment = int(modifier[:-1]) / 60
+    else:
+        adjustment = 0
     start, stop = timerange.split('-')    
     start = strptime(start, '%H:%M')
     stop = strptime(stop, '%H:%M')
-    numhours = (mktime(stop) - mktime(start)) / 3600
+    numhours = (mktime(stop) - mktime(start)) / 3600 + adjustment
     return date, numhours, project
 
 def parse_hours_file(filename):
