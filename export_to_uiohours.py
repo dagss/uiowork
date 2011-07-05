@@ -8,6 +8,9 @@ YEAR = 2011
 OUT = 'timeregistrering-dagss-%d.ods' % YEAR
 DATAFILE = 'hours.dat'
 
+HOLIDAY_PROJECT = -1
+SKIP_PROJECT = -2
+
 def get_week_number(date):
     return int(strftime('%W', date))
 
@@ -15,6 +18,8 @@ def get_first_week_of_month(date):
     return get_week_number(strptime(strftime('%Y-%m-01', date), '%Y-%m-%d'))
     
 def parse_time_record(line):
+    if '#' in line:
+        line = line[:line.index('#')]
     fields = line.split()
     date = strptime(fields[0], '%Y-%m-%d')
     timerange = fields[1]
@@ -23,18 +28,22 @@ def parse_time_record(line):
     else:
         project = None
         assert len(fields) == 2
-    if timerange == 'full':
-        timerange = '08:00-15:30'
-    if ';' in timerange:
-        timerange, modifier = timerange.split(';')
-        assert modifier[-1] == 'm'
-        adjustment = int(modifier[:-1]) / 60
+    if timerange in ('skip', 'holiday'):
+        project = timerange
+        numhours = 0
     else:
-        adjustment = 0
-    start, stop = timerange.split('-')    
-    start = strptime(start, '%H:%M')
-    stop = strptime(stop, '%H:%M')
-    numhours = (mktime(stop) - mktime(start)) / 3600 + adjustment
+        if timerange == 'full':
+            timerange = '08:00-15:30'
+        if ';' in timerange:
+            timerange, modifier = timerange.split(';')
+            assert modifier[-1] == 'm'
+            adjustment = int(modifier[:-1]) / 60
+        else:
+            adjustment = 0
+        start, stop = timerange.split('-')    
+        start = strptime(start, '%H:%M')
+        stop = strptime(stop, '%H:%M')
+        numhours = (mktime(stop) - mktime(start)) / 3600 + adjustment
     return date, numhours, project
 
 def parse_hours_file(filename):
@@ -66,10 +75,38 @@ def parse_hours_file(filename):
                 except:
                     hourlist = [0] * len(projects)
                     timetable[recdate] = hourlist
-                recidx = projects.index(recproject)
+                if recproject == 'holiday':
+                    recidx = HOLIDAY_PROJECT
+                elif recproject == 'skip':
+                    recidx = SKIP_PROJECT
+                else:
+                    recidx = projects.index(recproject)
                 hourlist[recidx] += rechours
     return person, projects, timetable
 
+def sanity_check(timetable):
+    # Check that all days are accounted for. Rules:
+    #  1. Saturday and Sunday off
+    #  2. Other days must be registered in one way or another
+    dates = timetable.keys()
+    dates.sort()
+    year = dates[0].tm_year
+    ydays_encountered = set(d.tm_yday for d in dates)
+    wday = dates[0].tm_wday
+    result = True
+    for yday in range(dates[0].tm_yday, dates[-1].tm_yday + 1):
+        if strftime('%Y-%m-%d', strptime("%s-%d" % (year, yday), "%Y-%j")) == '2011-04-25':
+            print wday
+            print yday in ydays_encountered
+        if wday >= 0 and wday < 5:
+            if not yday in ydays_encountered:
+                result = False
+                print ('WARNING: %s not registered' %
+                       strftime('%Y-%m-%d', strptime("%s-%d" % (year, yday), "%Y-%j")))
+        wday += 1
+        wday %= 7
+    return result
+        
 
 def persist_to_ods(template_filename, output_filename, person, projects, timetable):
     document = odf_get_document(template_filename)
@@ -118,12 +155,17 @@ def persist_to_ods(template_filename, output_filename, person, projects, timetab
             raise AssertionError("%d != %d" % (week_present_in_doc, week))
         row = 4 + 13 * week_offset
         col = 4 + date.tm_wday
-        for p, h in enumerate(hourlist):
-            set_value(tab, row + p, col, h)
+        for projidx, h in enumerate(hourlist):
+            if projidx in (HOLIDAY_PROJECT, SKIP_PROJECT):
+                continue # holiday
+            set_value(tab, row + projidx, col, h)
 
     document.save(output_filename)
     document = odf_get_document(output_filename)
 
 person, projects, timetable = parse_hours_file(DATAFILE)
-persist_to_ods(TEMPLATE, OUT, person, projects, timetable)
+if not sanity_check(timetable):
+    print 'ERROR: Fix errors, then I will move on'
+else:
+    persist_to_ods(TEMPLATE, OUT, person, projects, timetable)
 
