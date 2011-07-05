@@ -1,12 +1,8 @@
 from __future__ import division
 from lpod.document import odf_get_document
 from time import strptime, mktime, strftime
-
-# TODO: Command-line arguments
-TEMPLATE = 'timeregistrering.ods'
-YEAR = 2011
-OUT = 'timeregistrering-dagss-%d.ods' % YEAR
-DATAFILE = 'hours.dat'
+import argparse
+import sys
 
 HOLIDAY_PROJECT = -1
 SKIP_PROJECT = -2
@@ -56,6 +52,7 @@ def parse_hours_file(filename):
     person, list of projects, time table
     """
     timetable = {}
+    person = None
     with file(filename) as f:
         for line in f.readlines():
             line = line.strip()
@@ -82,6 +79,8 @@ def parse_hours_file(filename):
                 else:
                     recidx = projects.index(recproject)
                 hourlist[recidx] += rechours
+    if person is None:
+        raise ValueError("person field missing")
     return person, projects, timetable
 
 def sanity_check(timetable):
@@ -160,9 +159,26 @@ def persist_to_ods(template_filename, output_filename, person, projects, timetab
     document.save(output_filename)
     document = odf_get_document(output_filename)
 
-person, projects, timetable = parse_hours_file(DATAFILE)
-if not sanity_check(timetable):
-    print 'ERROR: Fix errors, then I will move on'
-else:
-    persist_to_ods(TEMPLATE, OUT, person, projects, timetable)
+def main(args):
+    if args.datafile == args.template:
+        raise Exception("Trying to overwrite template file...")
+    person, projects, timetable = parse_hours_file(args.datafile)
+    if not sanity_check(timetable):
+        sys.stderr.write('ERROR: Fix errors, then I will move on\n')
+        return 1
+    else:
+        persist_to_ods(args.template, args.outfile, person, projects, timetable)
+        return 0
 
+
+# TODO: Command-line arguments
+
+parser = argparse.ArgumentParser(description='Precomputation')
+
+parser.add_argument('-t', '--template', default='timeregistrering.ods',
+                    help='Template ODS file')
+
+parser.add_argument('datafile', help='Input file where hours worked are listed')
+parser.add_argument('outfile', help='Target output file')
+
+sys.exit(main(parser.parse_args()))
