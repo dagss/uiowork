@@ -95,9 +95,6 @@ def sanity_check(timetable):
     wday = dates[0].tm_wday
     result = True
     for yday in range(dates[0].tm_yday, dates[-1].tm_yday + 1):
-        if strftime('%Y-%m-%d', strptime("%s-%d" % (year, yday), "%Y-%j")) == '2011-04-25':
-            print wday
-            print yday in ydays_encountered
         if wday >= 0 and wday < 5:
             if not yday in ydays_encountered:
                 result = False
@@ -125,7 +122,7 @@ def persist_to_ods(template_filename, output_filename, person, projects, timetab
                 oversikt_table = tab
         else:
             month_tables[idx - 1] = tab
-            first_week_list[idx - 1] = int(tab.get_value((2, 2)))
+            first_week_list[idx - 1] = int(tab.get_row(2).get_cell(2).get_value())
 
     def set_value(tab, row, col, value):
         # For some reason, direct set_value on table does not work
@@ -149,7 +146,7 @@ def persist_to_ods(template_filename, output_filename, person, projects, timetab
         week = get_week_number(date)
         week_offset = week - first_week_list[month_idx]
         tab = month_tables[month_idx]
-        week_present_in_doc = int(tab.get_value((2, 2 + 13 * week_offset)))
+        week_present_in_doc = int(tab.get_row(2 + 13 * week_offset).get_cell(2).get_value())
         if week_present_in_doc != week:
             # Sanity check
             raise AssertionError("%d != %d" % (week_present_in_doc, week))
