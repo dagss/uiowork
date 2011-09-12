@@ -13,11 +13,16 @@ def get_week_number(date):
 def get_first_week_of_month(date):
     return get_week_number(strptime(strftime('%Y-%m-01', date), '%Y-%m-%d'))
     
-def parse_time_record(line):
+def parse_time_record(line, prev_date):
     if '#' in line:
         line = line[:line.index('#')]
     fields = line.split()
-    date = strptime(fields[0], '%Y-%m-%d')
+    if fields[0] == '..':
+        if prev_date is None:
+            raise ValueError('Cannot use .. as the first date')
+        date = prev_date
+    else:
+        date = strptime(fields[0], '%Y-%m-%d')
     timerange = fields[1]
     if len(fields) == 3:
         project = fields[2]
@@ -53,6 +58,7 @@ def parse_hours_file(filename):
     """
     timetable = {}
     person = None
+    recdate = None
     with file(filename) as f:
         for line in f.readlines():
             line = line.strip()
@@ -64,7 +70,7 @@ def parse_hours_file(filename):
                 projects = [x.strip() for x in line[len('projects:'):].split(',')]
                 default_project = projects[0]
             else:
-                recdate, rechours, recproject = parse_time_record(line)
+                recdate, rechours, recproject = parse_time_record(line, recdate)
                 if recproject is None:
                     recproject = default_project
                 try:
