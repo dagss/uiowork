@@ -109,19 +109,20 @@ def make_report(projects, timetable):
     summary = dict([(name, 0) for name in projects])
     summary['holiday'] = 0
     for date, work_dict in timetable.iteritems():
+        if date.tm_year != year:
+            raise Exception("Two different years in time table: %d and %d" % (year, date.tm_year))
         for project, hourcount in work_dict.iteritems():
             summary[project] += hourcount
-    return result, owed, summary
+    return result, owed, summary, year
 
 def persist_to_ods(template_filename, output_filename, person, projects, timetable,
-                   selected_months):
+                   selected_months, year):
     document = odf_get_document(template_filename)
     if document.get_type() != 'spreadsheet':
         raise AssertionError()
 
-    # Fetch the tables. The monthly tables are numbers.
+    # Fetch the tables. The monthly tables have numbers as names
     month_tables = [None] * 12
-    first_week_list = [None] * 12
     for tab in document.get_body().get_table_list():
         name = tab.get_name()
         try:
@@ -131,8 +132,24 @@ def persist_to_ods(template_filename, output_filename, person, projects, timetab
                 oversikt_table = tab
         else:
             month_tables[idx - 1] = tab
-            first_week_list[idx - 1] = int(tab.get_row(2).get_cell(2).get_value())
 
+    # Build a list of first week every year. (Since the week information
+    # in the template didn't always match up, simply always rewrite them)
+    def first_week_of(month):
+        return get_week_number(strptime('%d-%d-01' % (year, month), '%Y-%m-%d'))
+    first_week_list = [first_week_of(m) for m in range(1, 12 + 1)]
+
+    # Rewrite week numbers
+    for month in selected_months:
+        tab = month_tables[month - 1]
+        week_idx = 0
+        while tab.get_cell((1, 2 + 13 * week_idx)).get_value() == 'UKE':
+            c = tab.get_cell((2, 2 + 13 * week_idx))
+            c.set_value(first_week_list[month - 1] + week_idx)
+            c.set_formula(None)
+            tab.set_cell((2, 2 + 13 * week_idx), c)
+            week_idx += 1
+    
     def set_value(tab, row, col, value):
         # For some reason, direct set_value on table does not work
         r = tab.get_row(row)
@@ -160,20 +177,20 @@ def persist_to_ods(template_filename, output_filename, person, projects, timetab
         month_idx = date.tm_mon - 1
         week = get_week_number(date)
         week_offset = week - first_week_list[month_idx]
+        assert week_offset >= 0
         tab = month_tables[month_idx]
-        week_present_in_doc = int(tab.get_row(2 + 13 * week_offset).get_cell(2).get_value())
+        week_present_in_doc = int(tab.get_cell((2, 2 + 13 * week_offset)).get_value())
         if week_present_in_doc != week:
             # Sanity check
             raise AssertionError("%d != %d" % (week_present_in_doc, week))
         row = 4 + 13 * week_offset
         col = 4 + date.tm_wday
-        for project, h in enumerate(hourlist):
+        for project, h in hourlist.iteritems():
             idx = project_indices.get(project, None)
             if idx is not None:
-                set_value(tab, row + projidx, col, h)
+                set_value(tab, row + idx, col, h)
 
     document.save(output_filename)
-    document = odf_get_document(output_filename)
 
 def print_summary(owned, summary):
     def line(desc, value):
@@ -204,7 +221,7 @@ def main(args):
         raise Exception("Trying to overwrite template file...")
     person, projects, timetable = parse_hours_file(args.datafile)
 
-    ok, owned, summary = make_report(projects, timetable)
+    ok, owned, summary, year = make_report(projects, timetable)
     print_summary(owned, summary)
 
     if args.outfile is None:
@@ -216,7 +233,7 @@ def main(args):
         return 1
     else:
         persist_to_ods(args.template, args.outfile, person, projects, timetable,
-                       args.months)
+                       args.months, year)
         return 0
 
 
