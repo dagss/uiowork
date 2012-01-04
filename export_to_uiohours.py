@@ -112,7 +112,8 @@ def make_report(projects, timetable):
         if date.tm_year != year:
             raise Exception("Two different years in time table: %d and %d" % (year, date.tm_year))
         for project, hourcount in work_dict.iteritems():
-            summary[project] += hourcount
+            if hourcount > 0: # skip-ed days have hourcount==0
+                summary[project] += hourcount
     return result, owed, summary, year
 
 def persist_to_ods(template_filename, output_filename, person, projects, timetable,
