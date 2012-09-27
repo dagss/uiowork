@@ -234,22 +234,40 @@ def status_main(args):
     ok, owned, summary, year = make_report(projects, timetable)
     print_summary(owned, summary)
 
-def latex_main(args):
+def latex_main(args, stream=None):
     person, projects, project_names, timetable = parse_hours_file(args.datafile)
     ok, owed, summary, year = make_report(projects, timetable, args.month)
-    if args.outfile:
+    do_close = False
+    if stream is None and args.outfile:
         stream = file(args.outfile, 'w')
-    else:
+        do_close = True
+    elif stream is None:
         stream = sys.stdout
     try:
         write_tex_report(stream, person, projects, project_names,
                          timetable, args.month, year,
                          owed, summary)
     finally:
-        if args.outfile:
+        if do_close:
             stream.close()
     return 0
 
+def pdf_main(args):
+    import tempfile
+    import shutil
+    tempdir = tempfile.mkdtemp()
+    cwd = os.getcwd()
+    try:
+        texfile = os.path.join(tempdir, 'report.tex')
+        with file(texfile, 'w') as f:
+            latex_main(args, f)
+        outfile_fullpath = os.path.realpath(args.outfile)
+        os.chdir(tempdir)
+        os.system('pdflatex -interaction=nonstopmode "%s"' % texfile)
+        shutil.copy(os.path.join(tempdir, 'report.pdf'), outfile_fullpath)
+    finally:
+        os.chdir(cwd)
+        shutil.rmtree(tempdir)        
 
 # TODO: Command-line arguments
 
@@ -269,6 +287,13 @@ latex_parser.set_defaults(func=latex_main)
 latex_parser.add_argument('datafile', help='Input file where hours worked are listed')
 latex_parser.add_argument('month', type=int)
 latex_parser.add_argument('outfile', help='Target output file', nargs='?')
+
+pdf_parser = subcommands.add_parser('pdf', help='Make PDF file')
+pdf_parser.set_defaults(func=pdf_main)
+pdf_parser.add_argument('datafile', help='Input file where hours worked are listed')
+pdf_parser.add_argument('month', type=int)
+pdf_parser.add_argument('outfile', help='Target output file')
+
 
 args = parser.parse_args()
 sys.exit(args.func(args))
