@@ -264,7 +264,7 @@ status_parser.set_defaults(func=status_main)
 status_parser.add_argument('datafile', help='Input file where hours worked are listed')
 
 
-latex_parser = subcommands.add_parser('pdf', help='Make LaTeX file')
+latex_parser = subcommands.add_parser('latex', help='Make LaTeX file')
 latex_parser.set_defaults(func=latex_main)
 latex_parser.add_argument('datafile', help='Input file where hours worked are listed')
 latex_parser.add_argument('month', type=int)
