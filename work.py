@@ -1,8 +1,15 @@
+#encoding: utf-8
+
 from __future__ import division
-from lpod.document import odf_get_document
 from time import strptime, mktime, strftime
+import datetime
 import argparse
 import sys
+from pprint import pprint
+from textwrap import dedent
+from StringIO import StringIO
+import os
+import calendar
 
 HOLIDAY_PROJECT = -1
 SKIP_PROJECT = -2
@@ -59,6 +66,8 @@ def parse_hours_file(filename):
 
     person, time table
     """
+    projects = []
+    project_names = {}
     timetable = {}
     person = None
     recdate = None
@@ -70,7 +79,10 @@ def parse_hours_file(filename):
             elif line.startswith('name:'):
                 person = line[len('name:'):].strip()
             elif line.startswith('projects:'):
-                projects = [x.strip() for x in line[len('projects:'):].split(',')]
+                for p in [x.strip() for x in line[len('projects:'):].split(',')]:
+                    key, desc = p.split(':')
+                    project_names[key] = desc
+                    projects.append(key)
                 default_project = projects[0]
             else:
                 recdate, rechours, recproject = parse_time_record(line, recdate)
@@ -84,9 +96,9 @@ def parse_hours_file(filename):
                 hourlist[recproject] = hourlist.get(recproject, 0) + rechours
     if person is None:
         raise ValueError("person field missing")
-    return person, projects, timetable
+    return person, projects, project_names, timetable
 
-def make_report(projects, timetable):
+def make_report(projects, timetable, last_month=12):
     # Check that all days are accounted for. Rules:
     #  1. Saturday and Sunday off
     #  2. Other days must be registered in one way or another
@@ -97,7 +109,10 @@ def make_report(projects, timetable):
     wday = dates[0].tm_wday
     result = True
     owed = 0
+
     for yday in range(dates[0].tm_yday, dates[-1].tm_yday + 1):
+        if (datetime.datetime(year, 1, 1) + datetime.timedelta(days=yday)).month > last_month:
+            break
         if wday >= 0 and wday < 5:
             owed += 7.5
             if not yday in ydays_encountered:
@@ -109,89 +124,14 @@ def make_report(projects, timetable):
     summary = dict([(name, 0) for name in projects])
     summary['holiday'] = 0
     for date, work_dict in timetable.iteritems():
+        if date.tm_mon > last_month:
+            continue
         if date.tm_year != year:
             raise Exception("Two different years in time table: %d and %d" % (year, date.tm_year))
         for project, hourcount in work_dict.iteritems():
             if hourcount > 0: # skip-ed days have hourcount==0
                 summary[project] += hourcount
     return result, owed, summary, year
-
-def persist_to_ods(template_filename, output_filename, person, projects, timetable,
-                   selected_months, year):
-    document = odf_get_document(template_filename)
-    if document.get_type() != 'spreadsheet':
-        raise AssertionError()
-
-    # Fetch the tables. The monthly tables have numbers as names
-    month_tables = [None] * 12
-    for tab in document.get_body().get_table_list():
-        name = tab.get_name()
-        try:
-            idx = int(name) # a month?
-        except ValueError:
-            if name == 'Oversikt':
-                oversikt_table = tab
-        else:
-            month_tables[idx - 1] = tab
-
-    # Build a list of first week every year. (Since the week information
-    # in the template didn't always match up, simply always rewrite them)
-    def first_week_of(month):
-        return get_week_number(strptime('%d-%d-01' % (year, month), '%Y-%m-%d'))
-    first_week_list = [first_week_of(m) for m in range(1, 12 + 1)]
-
-    # Rewrite week numbers
-    for month in selected_months:
-        tab = month_tables[month - 1]
-        week_idx = 0
-        while tab.get_cell((1, 2 + 13 * week_idx)).get_value() == 'UKE':
-            c = tab.get_cell((2, 2 + 13 * week_idx))
-            c.set_value(first_week_list[month - 1] + week_idx)
-            c.set_formula(None)
-            tab.set_cell((2, 2 + 13 * week_idx), c)
-            week_idx += 1
-    
-    def set_value(tab, row, col, value):
-        # For some reason, direct set_value on table does not work
-        r = tab.get_row(row)
-        c = r.get_cell(col)
-        c.set_value(value)
-        r.set_cell(col, c)
-        tab.set_row(row, r)
-
-    # Register meta-information
-    set_value(oversikt_table, 6, 4, person)
-    set_value(oversikt_table, 10, 4, projects[0])
-    for idx, projname in enumerate(projects[1:]):
-        set_value(oversikt_table, 17 + idx, 2, 150300)
-        set_value(oversikt_table, 17 + idx, 3, 890000)
-        set_value(oversikt_table, 17 + idx, 4, projname)
-
-    project_indices = {}
-    for idx, project in enumerate(projects):
-        project_indices[project] = idx
-
-    # Register times
-    for date, hourlist in timetable.iteritems():
-        if date.tm_mon not in selected_months:
-            continue
-        month_idx = date.tm_mon - 1
-        week = get_week_number(date)
-        week_offset = week - first_week_list[month_idx]
-        assert week_offset >= 0
-        tab = month_tables[month_idx]
-        week_present_in_doc = int(tab.get_cell((2, 2 + 13 * week_offset)).get_value())
-        if week_present_in_doc != week:
-            # Sanity check
-            raise AssertionError("%d != %d" % (week_present_in_doc, week))
-        row = 4 + 13 * week_offset
-        col = 4 + date.tm_wday
-        for project, h in hourlist.iteritems():
-            idx = project_indices.get(project, None)
-            if idx is not None:
-                set_value(tab, row + idx, col, h)
-
-    document.save(output_filename)
 
 def print_summary(owned, summary):
     def line(desc, value):
@@ -211,31 +151,104 @@ def print_summary(owned, summary):
     line('- 7.5 hours per day', owned)
     bar()
     line('= Balance', s - owned)
+
+def write_tex_report(writer, person, projects, project_names,
+                     timetable, month, year, owed, summary):
+    month_names = ['januar', 'februar', 'mars', 'april', 'mai', 'juni', 'juli',
+                   'august', 'september', 'oktober', 'november', 'desember']
+    # Make table
+    tabw = StringIO()
+    tabw.write(r'\begin{tabular}{ll|%s|l}' % ('c' * len(projects)))
+    tabw.write(r'Uke & Dag & %s \\ ' '\n' r'\hline ' '\n' %
+               ' & '.join([r'{%s}' % project_names[p] for p in projects]))
+    prev_week = None
+    for date, hours in sorted(timetable.iteritems()):
+        if date.tm_mon != month:
+            continue
+
+        week_str = ''
+        week = datetime.date(date.tm_year, date.tm_mon, date.tm_mday).isocalendar()[1]
+        if prev_week != week:
+            # Skip a line
+            #if prev_week is not None:
+            #    tabw.write(r'\\ ' '\n')
+            week_str = str(week)
+            prev_week = week
+
+        # Comment if there's anything unusual
+        hours_wanted = 7.5 if date.tm_wday <= 4 else 0 
+        hours_worked = sum(how_much for what, how_much in hours.iteritems())
+        comment = ''
+        if 'holiday' in hours:
+            comment = 'Off. fridag'
+        elif hours_worked < hours_wanted:
+            comment = '%.1f t. avspasert' % (hours_wanted - hours_worked)
+        elif hours_worked > hours_wanted:
+            comment = '%.1f t. oppspart' % (hours_worked - hours_wanted)
+        tabw.write('%s & %s & ' % (week_str, date.tm_mday))
+        tabw.write(r' & '.join([('%.1f' % hours[p]) if p in hours else '---'
+                                   for p in projects]))
+        tabw.write(r' & %s \\' % comment)
+        tabw.write('\n')
+    tabw.write('\end{tabular}')
+    table_str = tabw.getvalue()
+
+    # Summary for whole year so far
+    sumw = StringIO()
+    sumw.write(r'\begin{tabular}{lr}')
+    s = 0
+    for project in projects:
+        sumw.write(r'%s & %.1f \\' % (project_names[project], summary[project]))
+        s += summary[project]
+    owed -= summary['holiday']
+    sumw.write(r'\hline Sum timer ført & %.1f \\' % s)
+    sumw.write(r'Antall arbeidsdager $\times$ 7.5 timer & %.1f \\' % owed)
+    sumw.write(r'\hline Opptjent avspasering(+)/må jobbe inn(-) & %.1f \\' % (s - owed))
     
+    # for date, hours in sorted(timetable.iteritems()):
+    #    if date.tm_mon > month:
+    #        continue
+    #    hours_total = sum(how_much for what, how_much in hours.iteritems())
+    #    print >> sys.stderr, date, hours_worked
+    #    s += hours_worked
+    sumw.write(r'\end{tabular}')
+    summary = sumw.getvalue()
 
-def main(args):
-    if not args.months:
-        args.months = range(1, 13)
-    else:
-        args.months = [int(x) for x in args.months]
-    if args.datafile == args.template:
-        raise Exception("Trying to overwrite template file...")
-    person, projects, timetable = parse_hours_file(args.datafile)
 
+    # Load template and substitute
+    with file(os.path.split(os.path.abspath(__file__))[0] + '/report_template.tex') as f:
+        template = f.read()
+
+    replacements = {'TABLE': table_str,
+                    'NAME': person,
+                    'MONTH': month_names[month - 1],
+                    'YEAR': str(year),
+                    'SUMMARY': summary}
+    for key, value in replacements.iteritems():
+        template = template.replace(key, value)
+    writer.write(template)
+
+
+def status_main(args):
+    person, projects, project_names, timetable = parse_hours_file(args.datafile)
     ok, owned, summary, year = make_report(projects, timetable)
     print_summary(owned, summary)
 
-    if args.outfile is None:
-        # report only
-        return
-    
-    if not ok:
-        sys.stderr.write('ERROR: Fix errors, then I will move on\n')
-        return 1
+def latex_main(args):
+    person, projects, project_names, timetable = parse_hours_file(args.datafile)
+    ok, owed, summary, year = make_report(projects, timetable, args.month)
+    if args.outfile:
+        stream = file(args.outfile, 'w')
     else:
-        persist_to_ods(args.template, args.outfile, person, projects, timetable,
-                       args.months, year)
-        return 0
+        stream = sys.stdout
+    try:
+        write_tex_report(stream, person, projects, project_names,
+                         timetable, args.month, year,
+                         owed, summary)
+    finally:
+        if args.outfile:
+            stream.close()
+    return 0
 
 
 # TODO: Command-line arguments
@@ -245,11 +258,17 @@ Generate report for worked hours. If outfile is not given, only
 report is printed.
 ''')
 
-parser.add_argument('-m', '--months', default=[], action='append')
-parser.add_argument('-t', '--template', default='timeregistrering.ods',
-                    help='Template ODS file')
+subcommands = parser.add_subparsers()
+status_parser = subcommands.add_parser('status', help='Sum up hours and show report in terminal')
+status_parser.set_defaults(func=status_main)
+status_parser.add_argument('datafile', help='Input file where hours worked are listed')
 
-parser.add_argument('datafile', help='Input file where hours worked are listed')
-parser.add_argument('outfile', help='Target output file', nargs='?')
 
-sys.exit(main(parser.parse_args()))
+latex_parser = subcommands.add_parser('pdf', help='Make LaTeX file')
+latex_parser.set_defaults(func=latex_main)
+latex_parser.add_argument('datafile', help='Input file where hours worked are listed')
+latex_parser.add_argument('month', type=int)
+latex_parser.add_argument('outfile', help='Target output file', nargs='?')
+
+args = parser.parse_args()
+sys.exit(args.func(args))
